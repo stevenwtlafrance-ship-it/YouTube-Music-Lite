@@ -108,6 +108,12 @@ Panel {
     root.playlistTracks = []
   }
 
+  function logout() {
+    if (root.busy) return
+    root.busy = true
+    logoutProc.running = true
+  }
+
   function search(query) {
     if (query === undefined || query.trim() === "") return
     root.searchQuery = query.trim()
@@ -295,6 +301,22 @@ Panel {
       root.busy = false
       if (exitCode !== 0) root.statusText = "Could not play playlist"
       if (exitCode === 0) afterCommand.restart()
+    }
+  }
+
+  Process {
+    id: logoutProc
+    command: [root.ctlPath, "logout"]
+    onExited: function(exitCode) {
+      root.busy = false
+      if (exitCode === 0) {
+        root.loggedIn = false
+        root.playlists = []
+        root.activePlaylistId = ""
+        root.activePlaylistTitle = ""
+        root.playlistTracks = []
+        root.close()
+      }
     }
   }
 
@@ -699,7 +721,7 @@ Panel {
 
                 TextField {
                   id: searchField
-                  width: parent.width - Style.space(88) - Style.spacing.sm * 2
+                  width: parent.width - Style.space(132) - Style.spacing.sm * 3
                   height: Style.spacing.controlHeight
                   placeholderText: "Lookup tunes..."
                   horizontalAlignment: Text.AlignHCenter
@@ -742,6 +764,17 @@ Panel {
                     root.searchResults = []
                     root.searching = false
                   }
+                }
+                Button {
+                  width: Style.space(44)
+                  height: Style.spacing.controlHeight
+                  iconText: Model.ICON.logout
+                  tooltipText: "Log out"
+                  fontFamily: root.fam
+                  foreground: root.fg
+                  visible: root.loggedIn
+                  enabled: !root.busy
+                  onClicked: root.logout()
                 }
               }
             }

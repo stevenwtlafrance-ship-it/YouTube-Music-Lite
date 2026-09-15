@@ -834,6 +834,7 @@ def main():
         print("  seek-pct <0-100>         Seek to percentage")
         print("  volume <0-150>           Set volume")
         print("  stop                     Stop playback")
+        print("  logout                   Remove local YouTube Music authentication")
         print("  like <videoId>           Like + add to Liked Music playlist")
         print("  dislike <videoId>        Remove like")
         print("  unlike <videoId>         Remove like (same as dislike)")

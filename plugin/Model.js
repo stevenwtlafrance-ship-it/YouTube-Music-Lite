@@ -14,6 +14,7 @@ const ICON = {
   shuffle: String.fromCharCode(0xf074),     // nf-fa-random
   repeat: String.fromCharCode(0xf036),      // nf-fa-repeat
   login: String.fromCharCode(0xf2f6),       // nf-fa-right_to_bracket
+  logout: String.fromCharCode(0xf2f5),      // nf-fa-right_from_bracket
   close: String.fromCharCode(0xf00d),       // nf-fa-times
   music: String.fromCharCode(0xf3d5),       // nf-fa-compact-disc
   plus: String.fromCharCode(0xf067),        // nf-fa-plus
