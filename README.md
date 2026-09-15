@@ -24,8 +24,8 @@ library/search actions and MPV with `yt-dlp` for audio playback.
 ## Install
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/omarchy-youtube-music.git
-cd omarchy-youtube-music
+git clone https://github.com/stevenwtlafrance-ship-it/YouTube-Music-Lite.git
+cd YouTube-Music-Lite
 ./install.sh
 ```
 

@@ -3,7 +3,7 @@
   "id": "yt-music",
   "name": "YouTube Music Lite",
   "version": "1.0.0",
-  "author": "masterhaxs",
+  "author": "stevenwtlafrance-ship-it",
   "description": "A lightweight YouTube Music player for Omarchy",
   "kinds": [
     "bar-widget"
