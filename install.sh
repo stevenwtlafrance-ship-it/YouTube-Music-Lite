@@ -31,8 +31,8 @@ python3 -m venv "${VENV}"
 
 rm -rf "${PLUGIN_DIR}"
 mkdir -p "${PLUGIN_DIR}"
-cp "${ROOT}/plugin/BarWidget.qml" "${ROOT}/plugin/Model.js" \
-  "${ROOT}/plugin/Panel.qml" "${ROOT}/plugin/manifest.json" "${PLUGIN_DIR}/"
+cp "${ROOT}/BarWidget.qml" "${ROOT}/Model.js" \
+  "${ROOT}/Panel.qml" "${ROOT}/manifest.json" "${PLUGIN_DIR}/"
 cp "${ROOT}/backend/yt_music.py" "${DATA_DIR}/yt_music.py"
 chmod 700 "${DATA_DIR}" "${VENV}"
 
