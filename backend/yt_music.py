@@ -70,12 +70,14 @@ def write_status(status):
     json_dump(STATUS_PATH, status)
 
 
-def get_ytmusic():
+def get_ytmusic(require_auth=True):
     try:
         from ytmusicapi import YTMusic
     except ImportError:
         fail("ytmusicapi not installed. Run: yt-music-ctl login")
     auth_path = os.path.join(CONFIG_DIR, "auth.json")
+    if not require_auth:
+        return YTMusic()
     if not os.path.exists(auth_path):
         fail("Not logged in. Run: yt-music-ctl login")
     return YTMusic(auth_path)
@@ -621,7 +623,7 @@ def cmd_search(args):
     if not args:
         fail("Usage: yt-music-ctl search <query>")
     query = " ".join(args)
-    ytm = get_ytmusic()
+    ytm = get_ytmusic(require_auth=False)
     try:
         results = ytm.search(query, filter="songs", limit=20)
         songs = []
@@ -649,7 +651,7 @@ def cmd_mix(args):
     if not args:
         fail("Usage: yt-music-ctl mix <videoId> [playlistId]")
     seed_id = args[0]
-    ytm = get_ytmusic()
+    ytm = get_ytmusic(require_auth=False)
     try:
         watchlist = ytm.get_watch_playlist(seed_id, limit=50)
         tracks = []
