@@ -74,6 +74,7 @@ Panel {
   }
 
   function loadPlaylists() {
+    if (playlistsProc.running) return
     playlistsProc.running = true
   }
 
@@ -365,6 +366,20 @@ Panel {
     onTriggered: root.search(searchField.text)
   }
 
+  Timer {
+    id: loginRefresh
+    interval: 2500
+    repeat: true
+    running: false
+    onTriggered: {
+      if (root.loggedIn) {
+        stop()
+      } else {
+        root.loadPlaylists()
+      }
+    }
+  }
+
   Menu {
     id: trackMenu
     property string videoId: ""
@@ -466,7 +481,8 @@ Panel {
                 foreground: root.fg
                 onClicked: {
                   root.close()
-                  if (root.bar) root.bar.run("omarchy-launch-terminal yt-music-ctl login")
+                  loginRefresh.start()
+                  if (root.bar) root.bar.run("omarchy-launch-terminal " + root.ctlPath + " login")
                 }
               }
             }
