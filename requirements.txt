@@ -1,0 +1,2 @@
+ytmusicapi>=1.12,<2
+browser-cookie3>=0.20,<1

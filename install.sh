@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PLUGIN_ID="yt-music"
+PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${PLUGIN_ID}"
+DATA_DIR="${HOME}/.local/share/yt-music"
+BIN_DIR="${HOME}/.local/bin"
+VENV="${DATA_DIR}/venv"
+
+if [[ "${1:-}" == "--uninstall" ]]; then
+  rm -rf "${PLUGIN_DIR}" "${DATA_DIR}" "${BIN_DIR}/yt-music-ctl"
+  if command -v omarchy >/dev/null 2>&1; then
+    omarchy plugin disable "${PLUGIN_ID}" >/dev/null 2>&1 || true
+  fi
+  printf 'Removed %s (authentication under ~/.config/yt-music was kept).\n' "${PLUGIN_ID}"
+  exit 0
+fi
+
+for command in python3 mpv yt-dlp; do
+  if ! command -v "${command}" >/dev/null 2>&1; then
+    printf 'Missing required command: %s\n' "${command}" >&2
+    exit 1
+  fi
+done
+
+mkdir -p "${BIN_DIR}" "${DATA_DIR}"
+python3 -m venv "${VENV}"
+"${VENV}/bin/python" -m pip install --upgrade pip
+"${VENV}/bin/python" -m pip install -r "${ROOT}/requirements.txt"
+
+rm -rf "${PLUGIN_DIR}"
+mkdir -p "${PLUGIN_DIR}"
+cp "${ROOT}/plugin/BarWidget.qml" "${ROOT}/plugin/Model.js" \
+  "${ROOT}/plugin/Panel.qml" "${ROOT}/plugin/manifest.json" "${PLUGIN_DIR}/"
+cp "${ROOT}/backend/yt_music.py" "${DATA_DIR}/yt_music.py"
+chmod 700 "${DATA_DIR}" "${VENV}"
+
+cat > "${BIN_DIR}/yt-music-ctl" <<EOF
+#!/usr/bin/env bash
+exec "${VENV}/bin/python" "${DATA_DIR}/yt_music.py" "\$@"
+EOF
+chmod 755 "${BIN_DIR}/yt-music-ctl"
+
+if command -v omarchy >/dev/null 2>&1; then
+  omarchy plugin enable "${PLUGIN_ID}" right >/dev/null 2>&1 || true
+  omarchy restart shell >/dev/null 2>&1 || true
+fi
+
+printf 'Installed %s. Run: yt-music-ctl login\n' "${PLUGIN_ID}"
