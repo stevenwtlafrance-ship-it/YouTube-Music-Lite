@@ -230,11 +230,24 @@ Panel {
         if (data && data.ok) {
           root.playlistTracks = data.tracks || []
           root.activePlaylistTitle = data.title || root.activePlaylistTitle
+          if (root.playlistTracks.length === 0)
+            root.statusText = "Playlist is empty"
+        } else if (data && data.error) {
+          root.statusText = data.error
         }
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var msg = String(text || "").trim()
+        if (msg !== "") root.statusText = msg.split("\n")[0]
       }
     }
     onExited: function(exitCode) {
       root.busy = false
+      if (exitCode !== 0 && root.statusText === "")
+        root.statusText = "Could not load playlist"
     }
   }
 

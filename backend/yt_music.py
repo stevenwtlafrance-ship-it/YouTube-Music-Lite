@@ -109,6 +109,16 @@ def get_ytmusic(require_auth=True):
     if not auth:
         fail("Authentication data is invalid. Run: yt-music-ctl login")
     refresh_auth_headers(auth)
+
+    # Browser cookies can expire while the local auth file still exists. In
+    # that case YouTube returns an anonymous library page instead of an error,
+    # which otherwise looks like an empty playlist collection.
+    if not validate_auth(auth):
+        fresh_auth = build_browser_auth()
+        if fresh_auth and validate_auth(fresh_auth):
+            auth = fresh_auth
+        else:
+            fail("YouTube session expired. Run: yt-music-ctl login")
     json_dump(auth_path, auth)
     return YTMusic(auth_path)
 
