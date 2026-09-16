@@ -38,6 +38,7 @@ Panel {
   property string searchQuery: ""
   property bool searching: false
   property var likedVideoIds: ({})
+  property string newPlaylistName: ""
 
   function open() {
     statusText = ""
@@ -113,6 +114,15 @@ Panel {
     if (root.busy) return
     root.busy = true
     logoutProc.running = true
+  }
+
+  function createPlaylist() {
+    var title = root.newPlaylistName.trim()
+    if (!title || root.busy) return
+    root.busy = true
+    root.statusText = "Creating playlist…"
+    createPlaylistProc.command = [root.ctlPath, "create-playlist", title]
+    createPlaylistProc.running = true
   }
 
   function search(query) {
@@ -318,6 +328,35 @@ Panel {
         root.playlistTracks = []
         root.close()
       }
+    }
+  }
+
+  Process {
+    id: createPlaylistProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var data = root.parseProcessJson(text)
+        if (data && data.ok) {
+          newPlaylistField.text = ""
+          root.newPlaylistName = ""
+          root.statusText = "Playlist created ✓"
+          root.loadPlaylists()
+        } else if (data && data.error) {
+          root.statusText = data.error
+        }
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var msg = String(text || "").trim()
+        if (msg !== "") root.statusText = msg.split("\n")[0]
+      }
+    }
+    onExited: function(exitCode) {
+      root.busy = false
+      if (exitCode !== 0) root.statusText = "Could not create playlist"
     }
   }
 
@@ -912,6 +951,36 @@ Panel {
                 text: "PLAYLISTS"
                 foreground: root.fg
                 fontFamily: root.fam
+              }
+            }
+
+            Row {
+              width: parent.width - Style.space(40)
+              height: Style.spacing.controlHeight
+              anchors.horizontalCenter: parent.horizontalCenter
+              spacing: Style.spacing.sm
+
+              TextField {
+                id: newPlaylistField
+                width: parent.width - Style.space(116) - parent.spacing
+                height: Style.spacing.controlHeight
+                placeholderText: "New playlist name"
+                foreground: root.fg
+                hasCursor: false
+                onTextChanged: root.newPlaylistName = text
+                onAccepted: root.createPlaylist()
+              }
+
+              Button {
+                width: Style.space(116)
+                height: Style.spacing.controlHeight
+                text: "Create"
+                iconText: Model.ICON.plus
+                fontFamily: root.fam
+                fontSize: Style.font.bodySmall
+                foreground: root.fg
+                enabled: root.newPlaylistName.trim() !== "" && !root.busy
+                onClicked: root.createPlaylist()
               }
             }
 

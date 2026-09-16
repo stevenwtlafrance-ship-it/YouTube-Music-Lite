@@ -65,6 +65,31 @@ def json_load(path, default=None):
         return default
 
 
+def refresh_auth_headers(auth):
+    """Refresh the timestamped auth signature before using stored cookies."""
+    if not isinstance(auth, dict):
+        return auth
+
+    cookie_header = auth.get("Cookie", "")
+    cookies = {}
+    for part in cookie_header.split(";"):
+        if "=" not in part:
+            continue
+        name, value = part.strip().split("=", 1)
+        cookies[name] = value
+
+    sapisid = cookies.get("__Secure-3PAPISID") or cookies.get("SAPISID")
+    if not sapisid:
+        return auth
+
+    import hashlib
+    origin = auth.get("Origin") or auth.get("X-Origin") or "https://music.youtube.com"
+    ts = str(int(time.time()))
+    digest = hashlib.sha1(f"{ts} {sapisid} {origin}".encode()).hexdigest()
+    auth["Authorization"] = f"SAPISIDHASH {ts}_{digest}"
+    return auth
+
+
 def write_status(status):
     status["_ts"] = time.time()
     json_dump(STATUS_PATH, status)
@@ -80,6 +105,11 @@ def get_ytmusic(require_auth=True):
         return YTMusic()
     if not os.path.exists(auth_path):
         fail("Not logged in. Run: yt-music-ctl login")
+    auth = json_load(auth_path)
+    if not auth:
+        fail("Authentication data is invalid. Run: yt-music-ctl login")
+    refresh_auth_headers(auth)
+    json_dump(auth_path, auth)
     return YTMusic(auth_path)
 
 
@@ -560,6 +590,22 @@ def cmd_playlists(args):
         print(json.dumps({"ok": False, "error": str(e)}))
 
 
+def cmd_create_playlist(args):
+    if not args:
+        fail("Usage: yt-music-ctl create-playlist <name>")
+    title = " ".join(args).strip()
+    if not title:
+        fail("Playlist name cannot be empty")
+    ytm = get_ytmusic()
+    try:
+        playlist_id = ytm.create_playlist(title, "", "PRIVATE")
+        if isinstance(playlist_id, dict):
+            playlist_id = playlist_id.get("playlistId", "")
+        print(json.dumps({"ok": True, "id": playlist_id, "title": title}))
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": str(e)}))
+
+
 def cmd_playlist_tracks(args):
     if not args:
         fail("Usage: yt-music-ctl playlist <playlistId>")
@@ -808,6 +854,7 @@ COMMANDS = {
     "dislike": cmd_dislike,
     "unlike": cmd_unlike,
     "playlists": cmd_playlists,
+    "create-playlist": cmd_create_playlist,
     "playlist": cmd_playlist_tracks,
     "remove": cmd_remove,
     "search": cmd_search,
@@ -841,6 +888,7 @@ def main():
         print("  dislike <videoId>        Remove like")
         print("  unlike <videoId>         Remove like (same as dislike)")
         print("  playlists                List library playlists")
+        print("  create-playlist <name>   Create a private playlist")
         print("  playlist <playlistId>    Get playlist tracks")
         print("  search <query>           Search for songs")
         print("  mix <videoId>            Play radio mix from seed")

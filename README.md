@@ -8,6 +8,7 @@ library/search actions and MPV with `yt-dlp` for audio playback.
 - Browser-cookie login with a manual-header fallback
 - Search while typing
 - Playlist browsing with explicit playlist playback
+- Create private playlists from the player
 - Play, pause, previous, next, shuffle, like, and dislike controls
 - Remove tracks from playlists with right-click
 - Album artwork and progress display
