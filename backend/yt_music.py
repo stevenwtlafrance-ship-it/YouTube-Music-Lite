@@ -14,8 +14,10 @@ import argparse
 import fcntl
 import json
 import os
+import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -63,6 +65,85 @@ def json_load(path, default=None):
             return json.load(f)
     except Exception:
         return default
+
+
+def private_runtime_dir():
+    """Return whether the MPV runtime directory is private and not a symlink."""
+    try:
+        st = os.lstat(MPV_RUNTIME_DIR)
+        return (stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
+                and not (st.st_mode & 0o077))
+    except OSError:
+        return False
+
+
+def ensure_private_runtime_dir():
+    os.makedirs(MPV_RUNTIME_DIR, mode=0o700, exist_ok=True)
+    try:
+        st = os.lstat(MPV_RUNTIME_DIR)
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid()
+                or st.st_mode & 0o077):
+            raise RuntimeError("MPV runtime directory is not private")
+        os.chmod(MPV_RUNTIME_DIR, 0o700)
+    except OSError as exc:
+        raise RuntimeError("MPV runtime directory is not private") from exc
+
+
+def private_mpv_socket():
+    if not private_runtime_dir():
+        return False
+    try:
+        st = os.lstat(MPV_SOCKET)
+        return stat.S_ISSOCK(st.st_mode) and st.st_uid == os.getuid()
+    except OSError:
+        return False
+
+
+def load_mpv_pid():
+    """Read the managed pidfile without following an attacker-controlled link."""
+    if not private_runtime_dir():
+        return None
+    try:
+        fd = os.open(MPV_PID_PATH, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            st = os.fstat(fd)
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                    or st.st_mode & 0o077):
+                return None
+            with os.fdopen(fd) as fh:
+                fd = None
+                return json.load(fh)
+        finally:
+            if fd is not None:
+                os.close(fd)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def mpv_process_identity(pid):
+    """Return Linux process start time and executable for a live process."""
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            stat_data = fh.read()
+        # The executable name is parenthesized and may itself contain spaces.
+        fields = stat_data[stat_data.rfind(")") + 2:].split()
+        start_time = fields[19]
+        executable = os.path.realpath(os.readlink(f"/proc/{pid}/exe"))
+        return start_time, executable
+    except (OSError, IndexError):
+        return None
+
+
+def mpv_pid_record(proc):
+    identity = mpv_process_identity(proc.pid)
+    if not identity:
+        return {"pid": proc.pid}
+    return {
+        "pid": proc.pid,
+        "start_time": identity[0],
+        "executable": identity[1],
+        "socket": MPV_SOCKET,
+    }
 
 
 def refresh_auth_headers(auth):
@@ -237,24 +318,51 @@ def mpv_is_running():
 
 def mpv_kill():
     # Shut down a pre-runtime-dir instance on the first managed replacement.
-    mpv_send("quit")
-    pid_data = json_load(MPV_PID_PATH, {}) or {}
+    if private_mpv_socket():
+        mpv_send("quit")
+    pid_data = load_mpv_pid() or {}
     pid = pid_data.get("pid")
-    if isinstance(pid, int):
+    identity = mpv_process_identity(pid) if isinstance(pid, int) and pid > 1 else None
+    expected_executable = os.path.realpath(shutil.which("mpv") or "")
+    identity_matches = (
+        identity is not None
+        and identity[0] == pid_data.get("start_time")
+        and identity[1] == pid_data.get("executable") == expected_executable
+        and pid_data.get("socket") == MPV_SOCKET
+    )
+    if identity_matches:
+        pidfd = None
         try:
-            os.kill(pid, signal.SIGTERM)
+            pidfd = os.pidfd_open(pid) if hasattr(os, "pidfd_open") else None
+            # Recheck after opening the pidfd so a dead process cannot be
+            # confused with a newly reused PID.
+            if mpv_process_identity(pid) != identity:
+                return
+            if pidfd is not None and hasattr(signal, "pidfd_send_signal"):
+                signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+            elif mpv_process_identity(pid) == identity:
+                os.kill(pid, signal.SIGTERM)
             deadline = time.time() + 2
             while time.time() < deadline:
                 try:
+                    if mpv_process_identity(pid) != identity:
+                        break
                     os.kill(pid, 0)
                 except OSError:
                     break
                 time.sleep(0.05)
             else:
-                os.kill(pid, signal.SIGKILL)
+                if pidfd is not None and hasattr(signal, "pidfd_send_signal"):
+                    signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                elif mpv_process_identity(pid) == identity:
+                    os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
-    for path in (MPV_SOCKET, LEGACY_MPV_SOCKET, MPV_PID_PATH):
+        finally:
+            if pidfd is not None:
+                os.close(pidfd)
+    paths = (MPV_SOCKET, MPV_PID_PATH) if private_runtime_dir() else ()
+    for path in paths + (LEGACY_MPV_SOCKET,):
         try:
             os.unlink(path)
         except OSError:
@@ -272,7 +380,7 @@ def wait_for_mpv(timeout=8):
 
 def mpv_play(video_id):
     mpv_kill()
-    os.makedirs(MPV_RUNTIME_DIR, mode=0o700, exist_ok=True)
+    ensure_private_runtime_dir()
     url = f"https://music.youtube.com/watch?v={video_id}"
     proc = subprocess.Popen([
         "mpv",
@@ -286,7 +394,7 @@ def mpv_play(video_id):
         "--ytdl-format=bestaudio/best",
         url
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    json_dump(MPV_PID_PATH, {"pid": proc.pid})
+    json_dump(MPV_PID_PATH, mpv_pid_record(proc))
     wait_for_mpv()
 
 
@@ -728,12 +836,12 @@ def cmd_mix(args):
             return
         mpv_kill()
         urls = [f"https://music.youtube.com/watch?v={t['videoId']}" for t in tracks]
-        os.makedirs(MPV_RUNTIME_DIR, mode=0o700, exist_ok=True)
+        ensure_private_runtime_dir()
         proc = subprocess.Popen(["mpv", "--no-video", "--really-quiet",
                                  f"--input-ipc-server={MPV_SOCKET}",
                                  "--keep-open=no"] + urls,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        json_dump(MPV_PID_PATH, {"pid": proc.pid})
+        json_dump(MPV_PID_PATH, mpv_pid_record(proc))
         wait_for_mpv()
         props = get_mpv_props()
         write_status_from_mpv(props)
@@ -764,12 +872,12 @@ def cmd_queue_playlist(args):
             print(json.dumps({"ok": False, "error": "Empty playlist"}))
             return
         mpv_kill()
-        os.makedirs(MPV_RUNTIME_DIR, mode=0o700, exist_ok=True)
+        ensure_private_runtime_dir()
         proc = subprocess.Popen(["mpv", "--no-video", "--really-quiet",
                                  f"--input-ipc-server={MPV_SOCKET}",
                                  "--keep-open=no"] + urls,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        json_dump(MPV_PID_PATH, {"pid": proc.pid})
+        json_dump(MPV_PID_PATH, mpv_pid_record(proc))
         wait_for_mpv()
         props = get_mpv_props()
         write_status_from_mpv(props)
