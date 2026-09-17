@@ -26,8 +26,8 @@ done
 
 mkdir -p "${BIN_DIR}" "${DATA_DIR}"
 python3 -m venv "${VENV}"
-"${VENV}/bin/python" -m pip install --upgrade pip
-"${VENV}/bin/python" -m pip install -r "${ROOT}/requirements.txt"
+"${VENV}/bin/python" -m pip install --require-hashes --only-binary=:all: \
+  -r "${ROOT}/requirements.txt"
 
 rm -rf "${PLUGIN_DIR}"
 mkdir -p "${PLUGIN_DIR}"
@@ -43,7 +43,7 @@ EOF
 chmod 755 "${BIN_DIR}/yt-music-ctl"
 
 if command -v omarchy >/dev/null 2>&1; then
-  omarchy plugin enable "${PLUGIN_ID}" right >/dev/null 2>&1 || true
+  omarchy plugin enable "${PLUGIN_ID}" center >/dev/null 2>&1 || true
   omarchy restart shell >/dev/null 2>&1 || true
 fi
 

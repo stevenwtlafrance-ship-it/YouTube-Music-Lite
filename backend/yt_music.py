@@ -309,7 +309,7 @@ def get_mpv_props():
         props = {}
         for name in ["pause", "media-title", "metadata/by-key/artist",
                       "metadata/by-key/album", "duration", "time-pos",
-                      "path", "filename"]:
+                      "volume", "path", "filename"]:
             cmd = json.dumps({"command": ["get_property", name]}) + "\n"
             sock.sendall(cmd.encode())
             resp = json.loads(sock.recv(4096).decode().strip().split("\n")[0])
@@ -348,6 +348,7 @@ def write_status_from_mpv(props):
     album = props.get("metadata/by-key/album", "")
     duration = props.get("duration", 0) or 0
     position = props.get("time-pos", 0) or 0
+    volume = props.get("volume", 100)
     video_id = extract_video_id(props)
     write_status({
         "ok": True,
@@ -359,6 +360,7 @@ def write_status_from_mpv(props):
         "videoId": video_id or "",
         "duration": round(float(duration)),
         "position": round(float(position)),
+        "volume": round(float(volume)),
     })
 
 
@@ -807,6 +809,9 @@ def cmd_volume(args):
         return
     vol = max(0, min(150, int(args[0])))
     mpv_send("set_property", ["volume", vol])
+    props = get_mpv_props()
+    write_status_from_mpv(props)
+    print(json.dumps({"ok": True, "volume": vol}))
 
 
 def cmd_loop(args):

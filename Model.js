@@ -2,6 +2,7 @@
 
 const ICON = {
   note: String.fromCharCode(0xf001),        // nf-fa-music
+  volume: String.fromCharCode(0xf028),      // nf-fa-volume_up
   play: String.fromCharCode(0xf04b),        // nf-fa-play
   pause: String.fromCharCode(0xf04c),       // nf-fa-pause
   next: String.fromCharCode(0xf051),        // nf-fa-forward

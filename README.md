@@ -31,8 +31,9 @@ cd YouTube-Music-Lite
 ```
 
 The installer creates a private virtual environment under
-`~/.local/share/yt-music`, installs the Python dependencies, installs the
-bar plugin, and enables it in the Omarchy bar.
+`~/.local/share/yt-music`, installs the exact hash-verified Python dependency
+lock, installs the bar plugin, and enables it in the Omarchy bar. The installer
+does not upgrade pip or download unpinned dependencies.
 
 Log in after installation:
 

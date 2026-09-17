@@ -777,6 +777,60 @@ Panel {
             }
           }
 
+          // ---- volume
+          Row {
+            visible: Model.isActive(root.musicStatus)
+            width: parent.width
+            height: Style.spacing.controlHeight
+            spacing: Style.spacing.lg
+
+            Text {
+              width: Style.space(120)
+              height: parent.height
+              verticalAlignment: Text.AlignVCenter
+              text: Model.ICON.volume + "  Volume"
+              color: root.fg
+              font.family: root.fam
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            PanelSlider {
+              id: volumeSlider
+              bar: root.bar
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - Style.space(120) - Style.space(56) - Style.spacing.lg * 2
+              minimum: 0
+              maximum: 100
+              integer: true
+              step: 1
+              tickCount: 11
+              value: root.musicStatus && root.musicStatus.volume !== undefined
+                ? root.musicStatus.volume
+                : 100
+              onReleased: function(v) {
+                var target = Math.round(v)
+                var current = root.musicStatus && root.musicStatus.volume !== undefined
+                  ? root.musicStatus.volume
+                  : 100
+                if (target !== current && !root.busy) root.sendCmd("volume", [String(target)])
+              }
+            }
+
+            Text {
+              width: Style.space(56)
+              height: parent.height
+              verticalAlignment: Text.AlignVCenter
+              horizontalAlignment: Text.AlignRight
+              text: (volumeSlider.dragging ? Math.round(volumeSlider.liveValue) :
+                (root.musicStatus && root.musicStatus.volume !== undefined
+                  ? root.musicStatus.volume
+                  : 100)) + "%"
+              color: root.fg
+              font.family: root.fam
+              font.pixelSize: Style.font.body
+            }
+          }
+
             // ---- search
             Item {
               width: parent.width

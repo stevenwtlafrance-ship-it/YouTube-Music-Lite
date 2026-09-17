@@ -16,6 +16,6 @@
     "description": "Lightweight music playback with playlists, search, and controls",
     "category": "Media",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "center"
   }
 }
