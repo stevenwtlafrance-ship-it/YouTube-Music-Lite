@@ -7,7 +7,7 @@ ytmusicapi + mpv. Status is written to ~/.local/state/yt-music/status.json.
 State lives under:
   ~/.config/yt-music/       auth.json (browser cookies)
   ~/.local/state/yt-music/  status.json (read by bar widget)
-  /tmp/yt-music-mpv.sock    mpv IPC socket
+  $XDG_RUNTIME_DIR/yt-music/mpv.sock  mpv IPC socket
 """
 
 import argparse
@@ -33,7 +33,6 @@ RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
 MPV_RUNTIME_DIR = os.path.join(RUNTIME_DIR, "yt-music")
 MPV_SOCKET = os.path.join(MPV_RUNTIME_DIR, "mpv.sock")
 MPV_PID_PATH = os.path.join(MPV_RUNTIME_DIR, "mpv.pid")
-LEGACY_MPV_SOCKET = "/tmp/yt-music-mpv.sock"
 LIKES_TITLE = "Liked Music"
 
 
@@ -68,11 +67,11 @@ def json_load(path, default=None):
 
 
 def private_runtime_dir():
-    """Return whether the MPV runtime directory is private and not a symlink."""
+    """Return whether the MPV runtime directory is a private owned directory."""
     try:
         st = os.lstat(MPV_RUNTIME_DIR)
         return (stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
-                and not (st.st_mode & 0o077))
+                and stat.S_IMODE(st.st_mode) == 0o700)
     except OSError:
         return False
 
@@ -296,19 +295,17 @@ def mpv_send(*args):
         else:
             flat.append(a)
     cmd = json.dumps({"command": flat}) + "\n"
-    for socket_path in (MPV_SOCKET, LEGACY_MPV_SOCKET):
-        if not os.path.exists(socket_path):
-            continue
-        try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    if not private_mpv_socket():
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(2)
-            sock.connect(socket_path)
+            sock.connect(MPV_SOCKET)
             sock.sendall(cmd.encode())
             data = sock.recv(4096).decode()
-            sock.close()
             return json.loads(data.strip().split("\n")[0])
-        except Exception:
-            continue
+    except Exception:
+        pass
     return None
 
 
@@ -362,7 +359,7 @@ def mpv_kill():
             if pidfd is not None:
                 os.close(pidfd)
     paths = (MPV_SOCKET, MPV_PID_PATH) if private_runtime_dir() else ()
-    for path in paths + (LEGACY_MPV_SOCKET,):
+    for path in paths:
         try:
             os.unlink(path)
         except OSError:
@@ -409,21 +406,21 @@ def mpv_control(*args):
 def get_mpv_props():
     if not mpv_is_running():
         return None
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(2)
+    if not private_mpv_socket():
+        return None
     try:
-        socket_path = MPV_SOCKET if os.path.exists(MPV_SOCKET) else LEGACY_MPV_SOCKET
-        sock.connect(socket_path)
-        props = {}
-        for name in ["pause", "media-title", "metadata/by-key/artist",
-                      "metadata/by-key/album", "duration", "time-pos",
-                      "volume", "path", "filename"]:
-            cmd = json.dumps({"command": ["get_property", name]}) + "\n"
-            sock.sendall(cmd.encode())
-            resp = json.loads(sock.recv(4096).decode().strip().split("\n")[0])
-            props[name] = resp.get("data")
-        sock.close()
-        return props
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(2)
+            sock.connect(MPV_SOCKET)
+            props = {}
+            for name in ["pause", "media-title", "metadata/by-key/artist",
+                         "metadata/by-key/album", "duration", "time-pos",
+                         "volume", "path", "filename"]:
+                cmd = json.dumps({"command": ["get_property", name]}) + "\n"
+                sock.sendall(cmd.encode())
+                resp = json.loads(sock.recv(4096).decode().strip().split("\n")[0])
+                props[name] = resp.get("data")
+            return props
     except Exception:
         return None
 
