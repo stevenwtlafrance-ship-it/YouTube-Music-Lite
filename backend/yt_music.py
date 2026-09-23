@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 import traceback
+import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 STATE_DIR = os.path.expanduser("~/.local/state/yt-music")
@@ -34,6 +35,10 @@ MPV_RUNTIME_DIR = os.path.join(RUNTIME_DIR, "yt-music")
 MPV_SOCKET = os.path.join(MPV_RUNTIME_DIR, "mpv.sock")
 MPV_PID_PATH = os.path.join(MPV_RUNTIME_DIR, "mpv.pid")
 LIKES_TITLE = "Liked Music"
+THUMBNAIL_CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "yt-music", "thumbs")
+MAX_THUMBNAIL_BYTES = 1024 * 1024
+MAX_THUMBNAIL_DIMENSION = 4096
+MAX_THUMBNAIL_PIXELS = 16 * 1024 * 1024
 
 
 # ---------------------------------------------------------------- helpers
@@ -41,6 +46,37 @@ LIKES_TITLE = "Liked Music"
 def fail(msg, code=1):
     print(f"yt-music-ctl: {msg}", file=sys.stderr)
     sys.exit(code)
+
+
+def valid_video_id(value):
+    return (isinstance(value, str) and len(value) == 11 and
+            all(c.isalnum() or c in "_-" for c in value))
+
+
+def jpeg_dimensions(data):
+    if len(data) < 4 or data[:2] != b"\xff\xd8":
+        return None
+    offset = 2
+    while offset + 4 <= len(data):
+        if data[offset] != 0xff:
+            offset += 1
+            continue
+        marker = data[offset + 1]
+        offset += 2
+        if marker in (0xd8, 0xd9):
+            continue
+        if offset + 2 > len(data):
+            return None
+        length = int.from_bytes(data[offset:offset + 2], "big")
+        if length < 2 or offset + length > len(data):
+            return None
+        if marker in range(0xc0, 0xc4) or marker in range(0xc5, 0xc8) or marker in range(0xc9, 0xcc) or marker in range(0xcd, 0xd0):
+            if length < 7:
+                return None
+            return (int.from_bytes(data[offset + 3:offset + 5], "big"),
+                    int.from_bytes(data[offset + 5:offset + 7], "big"))
+        offset += length
+    return None
 
 
 def json_dump(path, data, mode=0o600):
@@ -810,6 +846,38 @@ def cmd_search(args):
         print(json.dumps({"ok": False, "error": str(e)}))
 
 
+def cmd_thumbnail(args):
+    if not args or not valid_video_id(args[0]):
+        fail("Invalid video ID")
+    video_id = args[0]
+    os.makedirs(THUMBNAIL_CACHE_DIR, mode=0o700, exist_ok=True)
+    path = os.path.join(THUMBNAIL_CACHE_DIR, f"{video_id}.jpg")
+    try:
+        request = urllib.request.Request(
+            f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+            headers={"User-Agent": "yt-music-ctl/1"})
+        with urllib.request.urlopen(request, timeout=8) as response:
+            data = response.read(MAX_THUMBNAIL_BYTES + 1)
+        if len(data) > MAX_THUMBNAIL_BYTES:
+            fail("Thumbnail is too large")
+        dimensions = jpeg_dimensions(data)
+        if (not dimensions or dimensions[0] > MAX_THUMBNAIL_DIMENSION or
+                dimensions[1] > MAX_THUMBNAIL_DIMENSION or
+                dimensions[0] * dimensions[1] > MAX_THUMBNAIL_PIXELS):
+            fail("Thumbnail dimensions are not allowed")
+        fd, temporary = tempfile.mkstemp(dir=THUMBNAIL_CACHE_DIR, prefix=".thumb-", suffix=".jpg")
+        try:
+            with os.fdopen(fd, "wb") as output:
+                output.write(data)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    except Exception as exc:
+        fail(f"Thumbnail fetch failed: {exc}")
+
+
 def cmd_mix(args):
     if not args:
         fail("Usage: yt-music-ctl mix <videoId> [playlistId]")
@@ -978,6 +1046,7 @@ COMMANDS = {
     "playlist": cmd_playlist_tracks,
     "remove": cmd_remove,
     "search": cmd_search,
+    "thumbnail": cmd_thumbnail,
     "mix": cmd_mix,
     "queue": cmd_queue_playlist,
     "loop": cmd_loop,
@@ -1011,6 +1080,7 @@ def main():
         print("  create-playlist <name>   Create a private playlist")
         print("  playlist <playlistId>    Get playlist tracks")
         print("  search <query>           Search for songs")
+        print("  thumbnail <videoId>     Fetch a bounded album thumbnail")
         print("  mix <videoId>            Play radio mix from seed")
         print("  queue <playlistId>       Queue and play a playlist")
         print("  loop <mode>              Set loop mode (off/inf)")

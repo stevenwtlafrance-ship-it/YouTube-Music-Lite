@@ -39,6 +39,11 @@ Panel {
   property bool searching: false
   property var likedVideoIds: ({})
   property string newPlaylistName: ""
+  readonly property int maxProcessOutput: 65536
+  readonly property int commandTimeout: 15000
+  property var processOutput: ({})
+  property string thumbnailSource: ""
+  property string thumbnailVideoId: ""
 
   function open() {
     statusText = ""
@@ -62,7 +67,63 @@ Panel {
   function refresh() {
     if (root.refreshing) return
     root.refreshing = true
-    statusProc.running = true
+    root.startProcess(statusProc, "status")
+  }
+
+  function startProcess(proc, key) {
+    root.processOutput[key] = ""
+    proc.running = true
+  }
+
+  function appendProcessOutput(key, chunk) {
+    var current = String(root.processOutput[key] || "")
+    var remaining = root.maxProcessOutput - current.length
+    if (remaining <= 0) return
+    root.processOutput[key] = current + String(chunk || "").slice(0, remaining)
+  }
+
+  function processText(key) {
+    return String(root.processOutput[key] || "")
+  }
+
+  function boundedString(value, limit) {
+    return String(value === undefined || value === null ? "" : value).slice(0, limit)
+  }
+
+  function isVideoId(value) {
+    return /^[A-Za-z0-9_-]{11}$/.test(String(value || ""))
+  }
+
+  function normalizeSong(song) {
+    if (!song || !isVideoId(song.videoId)) return null
+    return {
+      videoId: String(song.videoId),
+      title: root.boundedString(song.title, 256),
+      artist: root.boundedString(song.artist, 256),
+      duration: Math.max(0, Math.min(86400, Number(song.duration) || 0))
+    }
+  }
+
+  function normalizeSongs(items, limit) {
+    var result = []
+    for (var i = 0; i < Math.min(Array.isArray(items) ? items.length : 0, limit); i++) {
+      var song = root.normalizeSong(items[i])
+      if (song) result.push(song)
+    }
+    return result
+  }
+
+  function normalizePlaylists(items) {
+    var result = []
+    for (var i = 0; i < Math.min(Array.isArray(items) ? items.length : 0, 100); i++) {
+      var playlist = items[i]
+      if (!playlist || !playlist.id) continue
+      result.push({
+        id: root.boundedString(playlist.id, 256),
+        title: root.boundedString(playlist.title, 256)
+      })
+    }
+    return result
   }
 
   function parseProcessJson(raw) {
@@ -76,7 +137,7 @@ Panel {
 
   function loadPlaylists() {
     if (playlistsProc.running) return
-    playlistsProc.running = true
+    root.startProcess(playlistsProc, "playlists")
   }
 
   function openPlaylist(id, title) {
@@ -85,14 +146,14 @@ Panel {
     root.playlistTracks = []
     root.statusText = ""
     tracksProc.command = [root.ctlPath, "playlist", id]
-    tracksProc.running = true
+    root.startProcess(tracksProc, "tracks")
   }
 
   function playSelectedPlaylist() {
     if (!root.activePlaylistId || root.busy) return
     root.busy = true
     queueProc.command = [root.ctlPath, "queue", root.activePlaylistId]
-    queueProc.running = true
+    root.startProcess(queueProc, "queue")
   }
 
   function selectPlaylist(id) {
@@ -113,7 +174,7 @@ Panel {
   function logout() {
     if (root.busy) return
     root.busy = true
-    logoutProc.running = true
+    root.startProcess(logoutProc, "logout")
   }
 
   function createPlaylist() {
@@ -122,7 +183,7 @@ Panel {
     root.busy = true
     root.statusText = "Creating playlist…"
     createPlaylistProc.command = [root.ctlPath, "create-playlist", title]
-    createPlaylistProc.running = true
+    root.startProcess(createPlaylistProc, "create")
   }
 
   function search(query) {
@@ -131,21 +192,21 @@ Panel {
     root.searchResults = []
     root.searching = true
     searchProc.command = [root.ctlPath, "search", root.searchQuery]
-    searchProc.running = true
+    root.startProcess(searchProc, "search")
   }
 
   function playNow(videoId) {
-    if (root.busy) return
+    if (root.busy || !root.isVideoId(videoId)) return
     root.busy = true
     playNowProc.command = [root.ctlPath, "play", videoId]
-    playNowProc.running = true
+    root.startProcess(playNowProc, "play")
   }
 
   function playMix(videoId) {
-    if (root.busy) return
+    if (root.busy || !root.isVideoId(videoId)) return
     root.busy = true
     mixProc.command = [root.ctlPath, "mix", videoId]
-    mixProc.running = true
+    root.startProcess(mixProc, "mix")
   }
 
   function sendCmd(command, args) {
@@ -153,16 +214,16 @@ Panel {
     root.busy = true
     statusText = "Sending " + command + "…"
     cmdProc.command = [root.ctlPath, command].concat((args || []).map(String))
-    cmdProc.running = true
+    root.startProcess(cmdProc, "cmd")
   }
 
   function likeCurrent() {
-    if (!root.musicStatus || !root.musicStatus.videoId) return
+    if (!root.musicStatus || !root.isVideoId(root.musicStatus.videoId)) return
     sendCmd("like", [root.musicStatus.videoId])
   }
 
   function dislikeCurrent() {
-    if (!root.musicStatus || !root.musicStatus.videoId) return
+    if (!root.musicStatus || !root.isVideoId(root.musicStatus.videoId)) return
     sendCmd("dislike", [root.musicStatus.videoId])
   }
 
@@ -171,21 +232,20 @@ Panel {
   Process {
     id: statusProc
     command: [root.ctlPath, "status"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        if (hostWidget && hostWidget.reloadState) hostWidget.reloadState()
+    stdout: DataStreamParser {
+      onRead: function(data) {
+        root.appendProcessOutput("status", data)
       }
     }
-    stderr: StdioCollector {
-      id: statusErr
-      waitForEnd: true
-      onStreamFinished: {
-        var msg = String(statusErr.text || "").trim()
-        if (msg !== "") root.statusText = msg.split("\n")[0]
-      }
+    stderr: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("statusErr", data) }
     }
+    onStarted: statusDeadline.start()
     onExited: function(exitCode) {
+      statusDeadline.stop()
+      var msg = root.processText("statusErr").trim()
+      if (msg !== "") root.statusText = root.boundedString(msg.split("\n")[0], 256)
+      if (hostWidget && hostWidget.reloadState) hostWidget.reloadState()
       root.refreshing = false
       if (!root.loggedIn && playlistsProc.state !== Process.Running)
         root.loadPlaylists()
@@ -195,27 +255,24 @@ Panel {
   Process {
     id: playlistsProc
     command: [root.ctlPath, "playlists"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var data = root.parseProcessJson(text)
-        if (data && data.ok) {
-          root.loggedIn = true
-          root.playlists = data.playlists || []
-        }
-      }
+    stdout: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("playlists", data) }
     }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var msg = String(text || "").trim()
-        if (msg.indexOf("Not logged in") !== -1) {
-          root.loggedIn = false
-          root.playlists = []
-        }
-      }
+    stderr: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("playlistsErr", data) }
     }
+    onStarted: playlistsDeadline.start()
     onExited: function(exitCode) {
+      playlistsDeadline.stop()
+      var data = root.parseProcessJson(root.processText("playlists"))
+      var msg = root.processText("playlistsErr").trim()
+      if (data && data.ok) {
+        root.loggedIn = true
+        root.playlists = root.normalizePlaylists(data.playlists)
+      } else if (msg.indexOf("Not logged in") !== -1) {
+        root.loggedIn = false
+        root.playlists = []
+      }
       root.busy = false
       root.refreshing = false
     }
@@ -223,28 +280,25 @@ Panel {
 
   Process {
     id: tracksProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var data = root.parseProcessJson(text)
-        if (data && data.ok) {
-          root.playlistTracks = data.tracks || []
-          root.activePlaylistTitle = data.title || root.activePlaylistTitle
-          if (root.playlistTracks.length === 0)
-            root.statusText = "Playlist is empty"
-        } else if (data && data.error) {
-          root.statusText = data.error
-        }
-      }
+    stdout: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("tracks", data) }
     }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var msg = String(text || "").trim()
-        if (msg !== "") root.statusText = msg.split("\n")[0]
-      }
+    stderr: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("tracksErr", data) }
     }
+    onStarted: tracksDeadline.start()
     onExited: function(exitCode) {
+      tracksDeadline.stop()
+      var data = root.parseProcessJson(root.processText("tracks"))
+      var msg = root.processText("tracksErr").trim()
+      if (data && data.ok) {
+        root.playlistTracks = root.normalizeSongs(data.tracks, 500)
+        root.activePlaylistTitle = root.boundedString(data.title || root.activePlaylistTitle, 256)
+        if (root.playlistTracks.length === 0) root.statusText = "Playlist is empty"
+      } else if (data && data.error) {
+        root.statusText = root.boundedString(data.error, 256)
+      }
+      if (msg !== "") root.statusText = root.boundedString(msg.split("\n")[0], 256)
       root.busy = false
       if (exitCode !== 0 && root.statusText === "")
         root.statusText = "Could not load playlist"
@@ -253,23 +307,18 @@ Panel {
 
   Process {
     id: searchProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var data = root.parseProcessJson(text)
-        if (data && data.ok && data.query === root.searchQuery) {
-          root.searchResults = data.songs || []
-          root.searching = false
-        }
-      }
+    stdout: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("search", data) }
     }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        root.searching = false
-      }
+    stderr: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("searchErr", data) }
     }
+    onStarted: searchDeadline.start()
     onExited: function(exitCode) {
+      searchDeadline.stop()
+      var data = root.parseProcessJson(root.processText("search"))
+      if (data && data.ok && data.query === root.searchQuery)
+        root.searchResults = root.normalizeSongs(data.songs, 100)
       root.busy = false
       root.searching = false
     }
@@ -277,9 +326,11 @@ Panel {
 
   Process {
     id: playNowProc
-    stdout: StdioCollector { waitForEnd: true }
-    stderr: StdioCollector { waitForEnd: true }
+    stdout: DataStreamParser { onRead: function(data) { root.appendProcessOutput("play", data) } }
+    stderr: DataStreamParser { onRead: function(data) { root.appendProcessOutput("playErr", data) } }
+    onStarted: playDeadline.start()
     onExited: function(exitCode) {
+      playDeadline.stop()
       root.busy = false
       if (exitCode === 0) {
         statusText = "Playing ✓"
@@ -292,9 +343,11 @@ Panel {
 
   Process {
     id: mixProc
-    stdout: StdioCollector { waitForEnd: true }
-    stderr: StdioCollector { waitForEnd: true }
+    stdout: DataStreamParser { onRead: function(data) { root.appendProcessOutput("mix", data) } }
+    stderr: DataStreamParser { onRead: function(data) { root.appendProcessOutput("mixErr", data) } }
+    onStarted: mixDeadline.start()
     onExited: function(exitCode) {
+      mixDeadline.stop()
       root.busy = false
       if (exitCode === 0) statusText = "Mix started ✓"
       else statusText = "Mix failed"
@@ -303,25 +356,22 @@ Panel {
 
   Process {
     id: queueProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var data = root.parseProcessJson(text)
-        if (data && data.ok)
-          root.statusText = "Playing " + (data.title || root.activePlaylistTitle) + " ✓"
-        else if (data && data.error)
-          root.statusText = data.error
-      }
+    stdout: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("queue", data) }
     }
-    stderr: StdioCollector {
-      id: queueErr
-      waitForEnd: true
-      onStreamFinished: {
-        var msg = String(text || "").trim()
-        if (msg !== "") root.statusText = msg.split("\n")[0]
-      }
+    stderr: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("queueErr", data) }
     }
+    onStarted: queueDeadline.start()
     onExited: function(exitCode) {
+      queueDeadline.stop()
+      var data = root.parseProcessJson(root.processText("queue"))
+      var msg = root.processText("queueErr").trim()
+      if (data && data.ok)
+        root.statusText = "Playing " + root.boundedString(data.title || root.activePlaylistTitle, 256) + " ✓"
+      else if (data && data.error)
+        root.statusText = root.boundedString(data.error, 256)
+      if (msg !== "") root.statusText = root.boundedString(msg.split("\n")[0], 256)
       root.busy = false
       if (exitCode !== 0) root.statusText = "Could not play playlist"
       if (exitCode === 0) afterCommand.restart()
@@ -331,7 +381,11 @@ Panel {
   Process {
     id: logoutProc
     command: [root.ctlPath, "logout"]
+    stdout: DataStreamParser { onRead: function(data) { root.appendProcessOutput("logout", data) } }
+    stderr: DataStreamParser { onRead: function(data) { root.appendProcessOutput("logoutErr", data) } }
+    onStarted: logoutDeadline.start()
     onExited: function(exitCode) {
+      logoutDeadline.stop()
       root.busy = false
       if (exitCode === 0) {
         root.loggedIn = false
@@ -346,28 +400,26 @@ Panel {
 
   Process {
     id: createPlaylistProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var data = root.parseProcessJson(text)
-        if (data && data.ok) {
-          newPlaylistField.text = ""
-          root.newPlaylistName = ""
-          root.statusText = "Playlist created ✓"
-          root.loadPlaylists()
-        } else if (data && data.error) {
-          root.statusText = data.error
-        }
-      }
+    stdout: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("create", data) }
     }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var msg = String(text || "").trim()
-        if (msg !== "") root.statusText = msg.split("\n")[0]
-      }
+    stderr: DataStreamParser {
+      onRead: function(data) { root.appendProcessOutput("createErr", data) }
     }
+    onStarted: createDeadline.start()
     onExited: function(exitCode) {
+      createDeadline.stop()
+      var data = root.parseProcessJson(root.processText("create"))
+      var msg = root.processText("createErr").trim()
+      if (data && data.ok) {
+        newPlaylistField.text = ""
+        root.newPlaylistName = ""
+        root.statusText = "Playlist created ✓"
+        root.loadPlaylists()
+      } else if (data && data.error) {
+        root.statusText = root.boundedString(data.error, 256)
+      }
+      if (msg !== "") root.statusText = root.boundedString(msg.split("\n")[0], 256)
       root.busy = false
       if (exitCode !== 0) root.statusText = "Could not create playlist"
     }
@@ -375,12 +427,11 @@ Panel {
 
   Process {
     id: cmdProc
-    stdout: StdioCollector { waitForEnd: true }
-    stderr: StdioCollector {
-      id: cmdErr
-      waitForEnd: true
-    }
+    stdout: DataStreamParser { onRead: function(data) { root.appendProcessOutput("cmd", data) } }
+    stderr: DataStreamParser { onRead: function(data) { root.appendProcessOutput("cmdErr", data) } }
+    onStarted: cmdDeadline.start()
     onExited: function(exitCode) {
+      cmdDeadline.stop()
       root.busy = false
       if (exitCode !== 0) {
         statusText = "Command failed"
@@ -391,11 +442,60 @@ Panel {
       statusText = action + " ✓"
       if (action === "Remove" && root.activePlaylistId) {
         tracksProc.command = [root.ctlPath, "playlist", root.activePlaylistId]
-        tracksProc.running = true
+        root.startProcess(tracksProc, "tracks")
       }
       afterCommand.restart()
     }
   }
+
+  Timer { id: statusDeadline; interval: root.commandTimeout; onTriggered: { if (statusProc.running) { statusProc.running = false; root.statusText = "Status request timed out" } } }
+  Timer { id: playlistsDeadline; interval: root.commandTimeout; onTriggered: { if (playlistsProc.running) { playlistsProc.running = false; root.statusText = "Library request timed out" } } }
+  Timer { id: tracksDeadline; interval: root.commandTimeout; onTriggered: { if (tracksProc.running) { tracksProc.running = false; root.statusText = "Playlist request timed out" } } }
+  Timer { id: searchDeadline; interval: root.commandTimeout; onTriggered: { if (searchProc.running) { searchProc.running = false; root.statusText = "Search timed out" } } }
+  Timer { id: playDeadline; interval: root.commandTimeout; onTriggered: { if (playNowProc.running) playNowProc.running = false } }
+  Timer { id: mixDeadline; interval: root.commandTimeout; onTriggered: { if (mixProc.running) mixProc.running = false } }
+  Timer { id: queueDeadline; interval: root.commandTimeout; onTriggered: { if (queueProc.running) queueProc.running = false } }
+  Timer { id: logoutDeadline; interval: root.commandTimeout; onTriggered: { if (logoutProc.running) logoutProc.running = false } }
+  Timer { id: createDeadline; interval: root.commandTimeout; onTriggered: { if (createPlaylistProc.running) createPlaylistProc.running = false } }
+  Timer { id: cmdDeadline; interval: root.commandTimeout; onTriggered: { if (cmdProc.running) cmdProc.running = false } }
+
+  Process {
+    id: thumbnailProc
+    command: [root.ctlPath, "thumbnail", root.thumbnailVideoId]
+    stdout: DataStreamParser { onRead: function(data) { root.appendProcessOutput("thumbnail", data) } }
+    stderr: DataStreamParser { onRead: function(data) { root.appendProcessOutput("thumbnailErr", data) } }
+    onStarted: thumbnailDeadline.start()
+    onExited: function(exitCode) {
+      thumbnailDeadline.stop()
+      root.thumbnailSource = exitCode === 0 && root.isVideoId(root.thumbnailVideoId)
+        ? "file://" + root.thumbnailPath(root.thumbnailVideoId)
+        : ""
+    }
+  }
+
+  Timer {
+    id: thumbnailDeadline
+    interval: root.commandTimeout
+    onTriggered: { if (thumbnailProc.running) thumbnailProc.running = false }
+  }
+
+  function thumbnailPath(videoId) {
+    return (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache"))
+      + "/yt-music/thumbs/" + videoId + ".jpg"
+  }
+
+  function loadThumbnail() {
+    var id = root.musicStatus ? String(root.musicStatus.videoId || "") : ""
+    root.thumbnailVideoId = root.isVideoId(id) ? id : ""
+    root.thumbnailSource = ""
+    if (root.thumbnailVideoId !== "") root.startProcess(thumbnailProc, "thumbnail")
+  }
+
+  onThumbnailVideoIdChanged: {
+    if (root.thumbnailVideoId === "") root.thumbnailSource = ""
+  }
+  onMusicStatusChanged: root.loadThumbnail()
+  Component.onCompleted: root.loadThumbnail()
 
   Timer {
     id: afterCommand
@@ -569,12 +669,12 @@ Panel {
                 Image {
                   id: albumImage
                   anchors.fill: parent
-                  source: root.musicStatus && root.musicStatus.videoId
-                    ? "https://i.ytimg.com/vi/" + root.musicStatus.videoId + "/hqdefault.jpg"
-                    : ""
+                  source: root.thumbnailSource
                   fillMode: Image.PreserveAspectCrop
                   asynchronous: true
                   cache: true
+                  sourceSize.width: 96
+                  sourceSize.height: 96
                 }
 
                 Text {
