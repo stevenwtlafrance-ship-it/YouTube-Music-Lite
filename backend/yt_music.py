@@ -509,7 +509,10 @@ def write_status_from_mpv(props):
 
 def cmd_login(args):
     auth_path = os.path.join(CONFIG_DIR, "auth.json")
-    os.makedirs(CONFIG_DIR, exist_ok=True)
+    # ytmusicapi's setup() writes with a plain open(), so the directory has to
+    # keep other users out of the moment the file is created.
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    os.chmod(CONFIG_DIR, 0o700)
 
     # try to read auth straight from the browser cookies — no manual paste
     if "--manual" not in args:
@@ -548,6 +551,7 @@ def cmd_login(args):
         fail("Login cancelled — no changes made.")
     except Exception as e:
         fail(f"Login failed: {e}")
+    os.chmod(auth_path, 0o600)
     print(f"Auth saved to {auth_path}")
     print("You can now use yt-music-ctl commands: playlists, search, play, mix")
 
